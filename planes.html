@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Air Combat Sandbox - Brawl Stars Regen & Mega Map</title>
+    <style>
+        html, body {
+            margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+            background-color: #9cbcd4; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; user-select: none;
+        }
+        #canvas-container { width: 100%; height: 100%; position: absolute; z-index: 1; }
+        #hud {
+            position: absolute; width: 100%; height: 100%; pointer-events: none; z-index: 10;
+            box-sizing: border-box; border: 15px solid rgba(0, 0, 0, 0.1);
+        }
+        .hud-text {
+            position: absolute; color: #00ff00; font-family: monospace; font-size: 16px;
+            text-shadow: 1px 1px 2px #000; font-weight: bold; line-height: 1.5;
+        }
+        #hud-left { left: 30px; top: 35%; }
+        #hud-right { right: 30px; top: 35%; }
+        #hud-top { top: 30px; left: 30px; }
+        #hud-bottom { bottom: 30px; left: 50%; transform: translateX(-50%); text-align: center; }
+        
+        #kill-feed {
+            position: absolute; top: 30px; left: 350px; z-index: 100;
+            display: flex; flex-direction: column; gap: 5px; pointer-events: none;
+            font-family: 'Courier New', monospace; font-size: 16px; font-weight: bold;
+        }
+        .kill-message {
+            background: rgba(0, 0, 0, 0.6); padding: 6px 12px; border-left: 4px solid #ff3333;
+            color: #fff; text-shadow: 1px 1px 1px #000; animation: fadeOut 5s forwards;
+        }
+        @keyframes fadeOut { 0% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }
+
+        #radar-container {
+            position: absolute; top: 30px; right: 30px; width: 160px; height: 160px;
+            background: rgba(0, 15, 0, 0.9); border: 3px solid #00ff00; border-radius: 50%;
+            z-index: 15; pointer-events: none; box-shadow: 0 0 15px rgba(0,255,0,0.4);
+        }
+        #radar-canvas { width: 100%; height: 100%; }
+        #mouse-reticle {
+            position: absolute; width: 24px; height: 24px; border: 2px dashed #00ff00;
+            border-radius: 50%; transform: translate(-50%, -50%); left: 50%; top: 50%; z-index: 11; pointer-events: none; display: none;
+        }
+        #center-dot {
+            position: absolute; width: 6px; height: 6px; background: rgba(0,255,0,0.6);
+            left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 10; pointer-events: none;
+        }
+        #damage-flash {
+            position: absolute; width: 100%; height: 100%; background: rgba(255, 0, 0, 0);
+            pointer-events: none; z-index: 9; transition: background 0.1s ease-out;
+        }
+        
+        #blockscreen {
+            position: absolute; width: 100%; height: 100%; background: rgba(10, 18, 26, 0.95);
+            z-index: 20; display: flex; justify-content: center; align-items: center; color: white; text-align: center;
+        }
+        .lobby-panel {
+            background: rgba(0,0,0,0.6); padding: 25px; border: 2px solid #00ff00; border-radius: 8px;
+            max-width: 650px; width: 90%; box-shadow: 0 0 25px rgba(0,255,0,0.15);
+        }
+        .btn {
+            background: #00ff00; color: black; border: none; padding: 10px 20px;
+            font-weight: bold; cursor: pointer; margin: 5px; font-size: 14px; font-family: monospace;
+        }
+        .btn:disabled { background: #333; color: #777; cursor: not-allowed; border: 1px solid #444; }
+        #room-code-input, #connect-input {
+            background: #111; color: #00ffff; border: 1px solid #00ffff; padding: 8px;
+            font-family: monospace; width: 60px; text-align: center; font-size: 16px; font-weight: bold;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="damage-flash"></div>
+    <div id="kill-feed"></div>
+
+    <div id="blockscreen">
+        <div class="lobby-panel">
+            <h1 style="margin:0 0 5px 0; font-size:2.2em; text-shadow: 2px 2px #000; color: #00ff00;">МАНЕВРЕННЫЙ БОЙ ONLINE</h1>
+            <p id="net-status" style="color: #00ffff; font-family: monospace; font-size: 14px; margin-bottom: 15px;">Ожидание ввода кода комнаты...</p>
+            
+            <div style="background: rgba(255,255,255,0.05); padding: 12px; border-radius: 5px; font-size: 13px; text-align: left; line-height: 1.4; margin-bottom: 15px;">
+                • <b>Бой насмерть:</b> Сбивайте других игроков и зарабатывайте очки киллов!<br>
+                • <b>Регенерация (как в Brawl Stars):</b> Не получайте урон 4 секунды для восстановления здоровья!<br>
+                • <b>Управление:</b> ЛКМ / ПРОБЕЛ — запуск ракет. W / S — изменение тяги. Кликните по экрану во время игры для захвата мыши.
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="font-family:monospace; color:#00ff00;">ВАШ ПОЗЫВНОЙ: </label>
+                <input type="text" id="player-name-input" value="Пилот" style="background:#111; color:#00ff00; border:1px solid #00ff00; padding:6px; font-family:monospace; width:150px; text-align:center;">
+            </div>
+
+            <div style="border-top: 1px dashed #333; padding-top: 15px; background: rgba(0,255,0,0.02); padding: 15px; border-radius: 6px;">
+                <p style="margin: 0 0 10px 0; font-size: 15px; font-family: monospace;"><b>ВАРИАНТ 1: СОЗДАТЬ СВОЙ СЕРВЕР</b></p>
+                <span style="font-family: monospace; font-size: 14px;">Придумайте 2 цифры: </span>
+                <input type="text" id="room-code-input" maxlength="2" value="77">
+                <button id="btn-create" class="btn">Стать Хостом Комнаты</button>
+                <button id="btn-solo" class="btn" style="background: #666; color: #fff;">Одиночная тренировка</button>
+            </div>
+
+            <div style="margin-top: 20px; border-top: 1px dashed #333; padding-top: 20px; background: rgba(0,255,255,0.02); padding: 15px; border-radius: 6px;">
+                <p style="margin: 0 0 10px 0; font-size: 15px; font-family: monospace;"><b>ВАРИАНТ 2: ПОДКЛЮЧИТЬСЯ К ДРУГУ</b></p>
+                <input type="text" id="connect-input" maxlength="2" placeholder="00">
+                <button id="btn-join" class="btn" style="background:#00ffff;">Подключиться к бою</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="radar-container"><canvas id="radar-canvas" width="160" height="160"></canvas></div>
+    <div id="mouse-reticle"></div>
+    <div id="center-dot"></div>
+
+    <div id="hud">
+        <div id="hud-left" class="hud-text">ТЯГА: <span id="val-thr">0</span>%<br>СКОРОСТЬ: <span id="val-spd">0</span> км/ч<br>БРОНЯ: <span id="val-hp" style="color:#00ff00;">100</span>% (<span id="val-status">НОРМА</span>)</div>
+        <div id="hud-right" class="hud-text">ВЫСОТА: <span id="val-alt">0</span> м<br>СБИТО ИГРОКОВ: <span id="val-kills" style="color:#ffff00;">0</span></div>
+        <div id="hud-top" class="hud-text">РЕЖИМ: <span id="val-mode" style="color:#00ffff;">Инициализация</span> &nbsp; [КОД СЕССИИ: <span id="val-myid" style="color:#ffff00;">--</span>]<br>ПОЗЫВНОЙ: <span id="val-myname" style="color:#00ff00;">---</span></div>
+        <div id="hud-bottom" class="hud-text">
+            <span id="crash-alert" style="color: #ff0000; display: none; font-size: 24px;">ВЫ СБИТЫ!<br><span id="end-reason"></span><br><span style="font-size:16px; color:#fff;">Возрождение через 3 секунды...</span></span>
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        const ROOM_PREFIX = "skyfight-room-";
+        let peer = null;
+        let connections = [];
+        let hostConnection = null;
+        let isHost = false;
+        let isMultiplayer = false;
+        let myShortId = ""; 
+        let playerName = "Пилот";
+
+        let scene, camera, renderer, radarContext;
+        let isLocked = false;
+        let mouseX = 0, mouseY = 0;
+
+        // Переменные для регенерации Brawl Stars
+        let lastDamageTime = 0;
+        const REGEN_DELAY = 4000; // 4 секунды без урона
+
+        const jet = {
+            id: "local",
+            name: "Пилот",
+            position: new THREE.Vector3((Math.random()-0.5)*200, 80, (Math.random()-0.5)*200),
+            velocity: new THREE.Vector3(0, 0, 0),
+            speed: 35,
+            rotation: new THREE.Euler(0, Math.PI, 0, 'YXZ'),
+            throttle: 70, maxThrust: 65, hp: 100,
+            isBroken: false, isCrashed: false,
+            color: '#' + Math.floor(Math.random()*16777215).toString(16)
+        };
+
+        let remotePlayersData = {};
+        let remotePlayerMeshes = {};
+        let collidableObjects = []; 
+        let activeRockets = [];
+        let enemyKillsCount = 0;
+        let keys = { w: false, s: false, space: false };
+
+        const materials = {
+            grass: new THREE.MeshBasicMaterial({ color: 0x3b5323 }),
+            asphalt: new THREE.MeshBasicMaterial({ color: 0x444444 }),
+            buildingClassic: new THREE.MeshBasicMaterial({ color: 0x90a4ae }),
+            buildingTower: new THREE.MeshBasicMaterial({ color: 0x78909c }),
+            buildingHangar: new THREE.MeshBasicMaterial({ color: 0xafb42b }),
+            rocket: new THREE.MeshBasicMaterial({ color: 0x222222 }),
+            explosion: new THREE.MeshBasicMaterial({ color: 0xff5722, transparent: true, opacity: 0.9 })
+        };
+
+        document.getElementById('room-code-input').value = Math.floor(10 + Math.random() * 90).toString();
+
+        function savePlayerName() {
+            const inputVal = document.getElementById('player-name-input').value.trim();
+            if(inputVal) {
+                playerName = inputVal;
+                jet.name = playerName;
+            }
+        }
+
+        // 1. Правка: Захват мыши при клике по документу/игровой зоне
+        document.addEventListener('click', () => {
+            if (!isLocked && document.getElementById('blockscreen').style.display === 'none') {
+                document.body.requestPointerLock();
+            }
+        });
+
+        document.getElementById('btn-solo').addEventListener('click', () => {
+            savePlayerName();
+            isMultiplayer = false;
+            document.getElementById('val-mode').innerText = "ЛОКАЛЬНАЯ ТРЕНИРОВКА";
+            document.getElementById('val-myid').innerText = "OFFLINE";
+            start3DGame();
+        });
+
+        document.getElementById('btn-create').addEventListener('click', () => {
+            savePlayerName();
+            const code = document.getElementById('room-code-input').value.trim();
+            if(code.length !== 2 || isNaN(code)) {
+                alert("Код комнаты должен состоять ровно из 2 цифр!");
+                return;
+            }
+
+            myShortId = code;
+            const fullPeerId = ROOM_PREFIX + myShortId;
+
+            document.getElementById('net-status').innerText = `Запуск сервера комнаты №${myShortId}...`;
+            document.getElementById('net-status').style.color = "#ffff00";
+
+            peer = new Peer(fullPeerId, {
+                host: 'peerjs-server-f20x.onrender.com',
+                port: 443,
+                secure: true,
+                path: '/',
+                config: { 'iceServers': [{ urls: 'stun:stun.l.google.com:19302' }] }
+            });
+
+            peer.on('open', (id) => {
+                isHost = true;
+                isMultiplayer = true;
+                jet.id = id;
+
+                document.getElementById('val-mode').innerText = "ХОСТ СЕРВЕРА";
+                document.getElementById('val-myid').innerText = myShortId;
+
+                peer.on('connection', (conn) => {
+                    connections.push(conn);
+                    conn.on('data', (data) => {
+                        if (data.type === 'client_update') remotePlayersData[data.id] = data;
+                        if (data.type === 'fire_rocket') spawnNetworkRocket(data.pos, data.dir, data.ownerId);
+                        if (data.type === 'kill_event') showKillMessage(data.killer, data.victim);
+                    });
+                    conn.on('close', () => {
+                        connections = connections.filter(c => c !== conn);
+                    });
+                });
+
+                start3DGame();
+            });
+
+            peer.on('error', (err) => {
+                console.error(err);
+                alert("Ошибка создания. Смените 2 цифры кода.");
+                document.getElementById('net-status').innerText = "Ошибка. Смените код комнаты.";
+                document.getElementById('net-status').style.color = "#ff3333";
+            });
+        });
+
+        document.getElementById('btn-join').addEventListener('click', () => {
+            savePlayerName();
+            const targetShortCode = document.getElementById('connect-input').value.trim();
+            if (targetShortCode.length !== 2 || isNaN(targetShortCode)) {
+                return alert("Введите корректный двухзначный код из цифр!");
+            }
+
+            document.getElementById('net-status').innerText = `Подключение к комнате №${targetShortCode}...`;
+            document.getElementById('net-status').style.color = "#ffff00";
+
+            peer = new Peer({
+                host: 'peerjs-server-f20x.onrender.com',
+                port: 443,
+                secure: true,
+                path: '/',
+                config: { 'iceServers': [{ urls: 'stun:stun.l.google.com:19302' }] }
+            });
+
+            peer.on('open', (myGeneratedId) => {
+                isHost = false;
+                isMultiplayer = true;
+                jet.id = myGeneratedId;
+
+                document.getElementById('val-mode').innerText = "В СЕТИ (КЛИЕНТ)";
+                document.getElementById('val-myid').innerText = targetShortCode;
+
+                const targetFullPeerId = ROOM_PREFIX + targetShortCode;
+                hostConnection = peer.connect(targetFullPeerId, { reliable: false });
+
+                hostConnection.on('open', () => {
+                    setInterval(() => {
+                        if (hostConnection.open && !jet.isCrashed) {
+                            hostConnection.send({
+                                type: 'client_update', id: jet.id, name: jet.name,
+                                x: jet.position.x, y: jet.position.y, z: jet.position.z,
+                                rx: jet.rotation.x, ry: jet.rotation.y, rz: jet.rotation.z,
+                                color: jet.color, hp: jet.hp, isBroken: jet.isBroken
+                            });
+                        }
+                    }, 16);
+
+                    start3DGame();
+                });
+
+                hostConnection.on('data', (data) => {
+                    if (data.type === 'world_update') remotePlayersData = data.players;
+                    if (data.type === 'kill_event') showKillMessage(data.killer, data.victim);
+                    if (data.type === 'hit_taken' && data.targetId === jet.id) {
+                        takeDamage(data.damage, data.killerName);
+                    }
+                });
+
+                hostConnection.on('error', (err) => {
+                    console.error(err);
+                    alert("Не удалось связаться с комнатой хоста.");
+                    location.reload();
+                });
+            });
+        });
+
+        function showKillMessage(killer, victim) {
+            const feed = document.getElementById('kill-feed');
+            const msg = document.createElement('div');
+            msg.className = 'kill-message';
+            msg.innerHTML = `<span style="color:#00ffff;">${killer}</span> 🎯 <span style="color:#ff3333;">${victim}</span>`;
+            feed.appendChild(msg);
+            setTimeout(() => msg.remove(), 5000);
+        }
+
+        function start3DGame() {
+            document.getElementById('blockscreen').style.display = 'none';
+            document.getElementById('val-myname').innerText = jet.name;
+            document.body.requestPointerLock();
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xa0c4de);
+            scene.fog = new THREE.FogExp2(0xa0c4de, 0.0007); // Реалистичный туман для больших карт
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.5, 4000);
+            
+            jet.object = new THREE.Group();
+            camera.position.set(0, 1.4, -2.5); 
+            camera.lookAt(0, 1.4, -18);
+            jet.object.add(camera);
+            scene.add(jet.object);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            radarContext = document.getElementById('radar-canvas').getContext('2d');
+
+            document.addEventListener('pointerlockchange', () => {
+                isLocked = document.pointerLockElement === document.body;
+                document.getElementById('mouse-reticle').style.display = isLocked ? 'block' : 'none';
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isLocked || jet.isBroken || jet.isCrashed) return;
+                mouseX = Math.max(-1, Math.min(1, mouseX + e.movementX * 0.0035));
+                mouseY = Math.max(-1, Math.min(1, mouseY - e.movementY * 0.0035));
+
+                document.getElementById('mouse-reticle').style.left = (window.innerWidth / 2 + mouseX * (window.innerWidth / 3)) + 'px';
+                document.getElementById('mouse-reticle').style.top = (window.innerHeight / 2 - mouseY * (window.innerHeight * 0.4)) + 'px';
+            });
+
+            document.addEventListener('mousedown', (e) => { if (isLocked && !jet.isBroken && e.button === 0) fireLocalRocket(); });
+            document.addEventListener('keydown', (e) => {
+                if (e.code === 'KeyW') keys.w = true; if (e.code === 'KeyS') keys.s = true;
+                if (e.code === 'Space') { if(!keys.space && isLocked && !jet.isBroken) fireLocalRocket(); keys.space = true; }
+            });
+            document.addEventListener('keyup', (e) => {
+                if (e.code === 'KeyW') keys.w = false; if (e.code === 'KeyS') keys.s = false;
+                if (e.code === 'Space') keys.space = false;
+            });
+
+            generateLargeScaleWorld();
+            window.addEventListener('resize', onWindowResize);
+
+            let lastTime = performance.now();
+            function frame() {
+                requestAnimationFrame(frame);
+                const now = performance.now();
+                const dt = (now - lastTime) / 1000;
+                lastTime = now;
+
+                updateFlightPhysics(dt);
+                updateWeaponsAndExplosions(dt);
+                // 2. Правка: Логика регенерации здоровья Brawl Stars
+                updateHealthRegen(now);
+                networkPlayersSyncLoop();
+                drawRadar();
+                updateHUD();
+                
+                renderer.render(scene, camera);
+            }
+            frame();
+        }
+
+        function createStaticBox(x, y, z, sx, sy, sz, mat) {
+            const geom = new THREE.BoxGeometry(sx, sy, sz);
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.position.set(x + sx/2, y + sy/2, z + sz/2);
+            scene.add(mesh);
+            collidableObjects.push(mesh);
+        }
+
+        // 3. Правка: Большая карта (8000х8000) с разнообразными пристройками и базами
+        function generateLargeScaleWorld() {
+            // Огромная земля
+            const ground = new THREE.Mesh(new THREE.BoxGeometry(8000, 2, 8000), materials.grass);
+            ground.position.set(0, -1, 0); scene.add(ground); collidableObjects.push(ground);
+
+            // Создаем взлетно-посадочные полосы (аэродромы)
+            for (let i = -2; i <= 2; i++) {
+                const rwy = new THREE.Mesh(new THREE.BoxGeometry(120, 1.5, 1200), materials.asphalt);
+                rwy.position.set(i * 1500, -0.2, i * 800);
+                scene.add(rwy);
+            }
+
+            // Наполнение карты пристройками по сетке
+            for (let x = -3000; x <= 3000; x += 400) {
+                for (let z = -3000; z <= 3000; z += 400) {
+                    // Возле центра оставляем свободную зону для старта
+                    if (Math.abs(x) < 250 && Math.abs(z) < 250) continue;
+
+                    let rand = Math.random();
+                    if (rand < 0.15) {
+                        // Жилой квартал (средние пристройки)
+                        createStaticBox(x, 0, z, 30, 25, 30, materials.buildingClassic);
+                        createStaticBox(x + 45, 0, z, 20, 18, 20, materials.buildingClassic);
+                    } 
+                    else if (rand > 0.15 && rand < 0.23) {
+                        // Высотная башня / Небоскреб
+                        let height = 90 + Math.random() * 80;
+                        createStaticBox(x, 0, z, 25, height, 25, materials.buildingTower);
+                    } 
+                    else if (rand > 0.85) {
+                        // Промышленные ангары / длинные пристройки
+                        createStaticBox(x, 0, z, 70, 15, 35, materials.buildingHangar);
+                    }
+                }
+            }
+        }
+
+        function updateFlightPhysics(dt) {
+            if (jet.isCrashed) return;
+
+            if (jet.isBroken) {
+                jet.rotation.x += 1.5 * dt; jet.rotation.z += 2.2 * dt;
+                jet.speed = Math.max(15, jet.speed - 12 * dt);
+                jet.velocity.set(0, -25, -jet.speed).applyEuler(jet.rotation);
+                jet.position.addScaledVector(jet.velocity, dt);
+                if (jet.position.y < 1.5) { processDeath("ЗЕМЛЯ"); return; }
+            } else {
+                if (keys.w) jet.throttle = Math.min(100, jet.throttle + 35 * dt);
+                if (keys.s) jet.throttle = Math.max(25, jet.throttle - 45 * dt);
+
+                jet.rotation.x += (mouseY * 1.7 - jet.rotation.x) * 4.5 * dt;
+                jet.rotation.z += ((-mouseX * 1.4) - jet.rotation.z) * 5.0 * dt;
+                jet.rotation.y += jet.rotation.z * 1.2 * dt;
+
+                const forwardDir = new THREE.Vector3(0, 0, -1).applyEuler(jet.rotation);
+                jet.speed += (((jet.throttle / 100) * jet.maxThrust) - jet.speed) * 1.8 * dt;
+                jet.velocity.copy(forwardDir).multiplyScalar(jet.speed);
+                jet.position.addScaledVector(jet.velocity, dt);
+                
+                mouseX -= mouseX * 0.75 * dt; mouseY -= mouseY * 0.75 * dt;
+
+                // Столкновение с землей или пристройками
+                if (jet.position.y < 1.5) { processDeath("ЗЕМЛЯ"); return; }
+            }
+
+            jet.object.position.copy(jet.position);
+            jet.object.rotation.copy(jet.rotation);
+        }
+
+        function takeDamage(amount, attackerName) {
+            if (jet.isCrashed || jet.isBroken) return;
+            jet.hp -= amount;
+            lastDamageTime = performance.now(); // Сбрасываем таймер для регенерации
+
+            let f = document.getElementById('damage-flash'); f.style.background = "rgba(255, 0, 0, 0.45)";
+            setTimeout(() => { f.style.background = "rgba(255,0,0,0)"; }, 90);
+
+            if (jet.hp <= 0) processDeath(attackerName);
+        }
+
+        // Регенерация здоровья а-ля Brawl Stars
+        function updateHealthRegen(now) {
+            if (jet.isCrashed || jet.isBroken || jet.hp >= 100) return;
+
+            // Если прошло больше 4 секунд после последнего получения урона
+            if (now - lastDamageTime > REGEN_DELAY) {
+                // Восстанавливаем здоровье со скоростью примерно 20% в секунду
+                jet.hp = Math.min(100, jet.hp + 20 * (1/60)); 
+            }
+        }
+
+        function processDeath(killerName) {
+            jet.isBroken = true; jet.isCrashed = true; jet.hp = 0;
+            triggerVisualExplosion(jet.position);
+
+            const killPacket = { type: 'kill_event', killer: killerName, victim: jet.name };
+            if (isMultiplayer) {
+                if (isHost) broadcastToAllClients(killPacket);
+                else if (hostConnection && hostConnection.open) hostConnection.send(killPacket);
+            }
+            showKillMessage(killerName, jet.name);
+
+            document.getElementById('crash-alert').style.display = 'block';
+            document.getElementById('end-reason').innerText = `Ликвидатор: ${killerName}`;
+            setTimeout(respawnPlayer, 3000);
+        }
+
+        function respawnPlayer() {
+            document.getElementById('crash-alert').style.display = 'none';
+            jet.position.set((Math.random() - 0.5) * 400, 70 + Math.random() * 40, (Math.random() - 0.5) * 400);
+            jet.rotation.set(0, Math.PI, 0);
+            jet.speed = 35; jet.throttle = 70; jet.hp = 100; jet.isBroken = false; jet.isCrashed = false;
+            lastDamageTime = performance.now();
+        }
+
+        function fireLocalRocket() {
+            if (jet.isCrashed || jet.isBroken) return;
+            const spawnPos = new THREE.Vector3(0, 0, -3.5).applyMatrix4(jet.object.matrixWorld);
+            const dir = new THREE.Vector3(0, 0, -1).applyEuler(jet.rotation).normalize();
+
+            if (isMultiplayer) {
+                const packet = { type: 'fire_rocket', pos: spawnPos, dir: dir, ownerId: jet.id };
+                if (isHost) broadcastToAllClients(packet);
+                else if (hostConnection && hostConnection.open) hostConnection.send(packet);
+            }
+            spawnNetworkRocket(spawnPos, dir, jet.id);
+        }
+
+        function spawnNetworkRocket(pos, dir, ownerId) {
+            const geom = new THREE.CylinderGeometry(0.18, 0.18, 2.2, 4); geom.rotateX(Math.PI / 2);
+            const mesh = new THREE.Mesh(geom, materials.rocket);
+            mesh.position.copy(pos); mesh.lookAt(pos.clone().add(dir)); scene.add(mesh);
+            activeRockets.push({ mesh: mesh, direction: dir, speed: 175, lifeTime: 4.0, ownerId: ownerId });
+        }
+
+        function updateWeaponsAndExplosions(dt) {
+            for (let i = activeRockets.length - 1; i >= 0; i--) {
+                let r = activeRockets[i];
+                r.mesh.position.addScaledVector(r.direction, r.speed * dt);
+                r.lifeTime -= dt;
+                let exploded = false;
+
+                if (isMultiplayer && r.ownerId !== jet.id && !jet.isCrashed) {
+                    if (r.mesh.position.distanceTo(jet.position) < 13.0) {
+                        exploded = true;
+                        let attacker = "Враг";
+                        for (let id in remotePlayersData) { if (id === r.ownerId) attacker = remotePlayersData[id].name; }
+                        takeDamage(34, attacker);
+                    }
+                }
+
+                if (isHost && r.ownerId === jet.id) {
+                    for (let pId in remotePlayerMeshes) {
+                        if (r.mesh.position.distanceTo(remotePlayerMeshes[pId].position) < 13.0) {
+                            exploded = true;
+                            enemyKillsCount++;
+                            broadcastToAllClients({ type: 'hit_taken', targetId: pId, damage: 34, killerName: jet.name });
+                            break;
+                        }
+                    }
+                }
+
+                if (r.mesh.position.y <= 1.0 || r.lifeTime <= 0) exploded = true;
+
+                if (exploded) {
+                    triggerVisualExplosion(r.mesh.position);
+                    scene.remove(r.mesh); activeRockets.splice(i, 1);
+                }
+            }
+        }
+
+        function networkPlayersSyncLoop() {
+            if (!isMultiplayer) return;
+
+            if (isHost) {
+                const activeIds = connections.map(c => c.peer);
+                for (let id in remotePlayersData) {
+                    if (id !== jet.id && !activeIds.includes(id)) {
+                        delete remotePlayersData[id];
+                        if (remotePlayerMeshes[id]) {
+                            scene.remove(remotePlayerMeshes[id]);
+                            delete remotePlayerMeshes[id];
+                        }
+                    }
+                }
+
+                remotePlayersData[jet.id] = {
+                    id: jet.id, name: jet.name, x: jet.position.x, y: jet.position.y, z: jet.position.z,
+                    rx: jet.rotation.x, ry: jet.rotation.y, rz: jet.rotation.z, color: jet.color, hp: jet.hp, isBroken: jet.isBroken
+                };
+                broadcastToAllClients({ type: 'world_update', players: remotePlayersData });
+            }
+
+            for (let id in remotePlayersData) {
+                if (id === jet.id) continue; 
+                const pData = remotePlayersData[id];
+
+                if (!remotePlayerMeshes[id]) {
+                    const group = new THREE.Group();
+                    const body = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.9, 5.2), new THREE.MeshBasicMaterial({ color: pData.color || 0xff0000 }));
+                    const wings = new THREE.Mesh(new THREE.BoxGeometry(9.5, 0.1, 1.9), new THREE.MeshBasicMaterial({ color: 0x222222 }));
+                    group.add(body, wings); 
+                    scene.add(group); 
+                    remotePlayerMeshes[id] = group;
+                }
+
+                const mesh = remotePlayerMeshes[id];
+                if (pData.isBroken || pData.hp <= 0) { 
+                    mesh.position.set(0, -999, 0); 
+                } else {
+                    mesh.position.lerp(new THREE.Vector3(pData.x, pData.y, pData.z), 0.25);
+                    mesh.rotation.set(pData.rx, pData.ry, pData.rz);
+                }
+            }
+
+            for (let id in remotePlayerMeshes) {
+                if (id !== jet.id && !remotePlayersData[id]) {
+                    scene.remove(remotePlayerMeshes[id]);
+                    delete remotePlayerMeshes[id];
+                }
+            }
+        }
+
+        function broadcastToAllClients(packet) {
+            connections.forEach(c => { if(c.open) c.send(packet); });
+        }
+
+        function triggerVisualExplosion(pos) {
+            const flash = new THREE.Mesh(new THREE.SphereGeometry(7, 6, 6), materials.explosion);
+            flash.position.copy(pos); scene.add(flash);
+            setTimeout(() => scene.remove(flash), 100);
+        }
+
+        function drawRadar() {
+            radarContext.clearRect(0, 0, 160, 160);
+            const cx = 80, cy = 80, rRadius = 75, scale = 0.05; // Уменьшен масштаб радара для гигантской карты
+            radarContext.strokeStyle = "rgba(0, 255, 0, 0.2)";
+            radarContext.beginPath(); radarContext.arc(cx, cy, rRadius, 0, Math.PI*2); radarContext.stroke();
+
+            for (let id in remotePlayerMeshes) {
+                let p = remotePlayerMeshes[id]; if(p.position.y < 0) continue;
+                let dx = p.position.x - jet.position.x; let dz = p.position.z - jet.position.z;
+                let rX = dx * Math.cos(jet.rotation.y) - dz * Math.sin(jet.rotation.y);
+                let rY = dx * Math.sin(jet.rotation.y) + dz * Math.cos(jet.rotation.y);
+                radarContext.fillStyle = "#ffff00"; radarContext.beginPath(); radarContext.arc(cx + rX * scale, cy + rY * scale, 4, 0, Math.PI*2); radarContext.fill();
+            }
+            radarContext.fillStyle = "#00ff00"; radarContext.beginPath(); radarContext.moveTo(cx, cy-6); radarContext.lineTo(cx-4, cy+4); radarContext.lineTo(cx+4, cy+4); radarContext.fill();
+        }
+
+        function updateHUD() {
+            document.getElementById('val-thr').innerText = Math.round(jet.throttle);
+            document.getElementById('val-spd').innerText = Math.round(jet.speed * 6);
+            document.getElementById('val-alt').innerText = Math.max(0, jet.position.y.toFixed(0));
+            document.getElementById('val-kills').innerText = enemyKillsCount;
+            
+            let hpRound = Math.round(jet.hp);
+            document.getElementById('val-hp').innerText = hpRound;
+
+            // Отображение статуса регенерации
+            let timeSinceDmg = performance.now() - lastDamageTime;
+            if (hpRound < 100 && timeSinceDmg > REGEN_DELAY) {
+                document.getElementById('val-status').innerText = "РЕГЕНЕРАЦИЯ";
+                document.getElementById('val-status').style.color = "#00ffff";
+            } else {
+                document.getElementById('val-status').innerText = hpRound < 40 ? "КРИТ" : "НОРМА";
+                document.getElementById('val-status').style.color = hpRound < 40 ? "#ff5722" : "#00ff00";
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+    </script>
+</body>
+</html>
